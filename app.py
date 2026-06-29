@@ -152,8 +152,23 @@ html, body, [class*='css'] {
 # ── spaCy model loader ────────────────────────────────────────────────────────
 @st.cache_resource
 def load_nlp():
-    # We now rely on the pre-installed model via packages.txt
-    return spacy.load('en_core_web_sm')
+    # Define a local path in your project folder
+    model_path = os.path.join(os.getcwd(), "spacy_models", "en_core_web_sm")
+    
+    try:
+        return spacy.load(model_path)
+    except OSError:
+        # If not found, download it to the local folder
+        print("Downloading spaCy model to local directory...")
+        subprocess.check_call([
+            sys.executable, "-m", "spacy", "download", "en_core_web_sm", 
+            "--target", os.path.join(os.getcwd(), "spacy_models")
+        ])
+        # Add the download path to the system path so spaCy can find it
+        sys.path.append(os.path.join(os.getcwd(), "spacy_models"))
+        return spacy.load("en_core_web_sm")
+
+nlp = load_nlp()
 
 # ── NLTK data auto-download ───────────────────────────────────────────────────
 @st.cache_resource
