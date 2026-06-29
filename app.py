@@ -304,23 +304,9 @@ def detect_language(text):
     except:
         return 'en'
 
-def groq_ai(prompt, system="You are a professional linguistics expert and English teacher."):
-    global groq_client
-    if groq_client is None:
-        return "⚠️ Groq client not initialized. Please configure your API key."
-    try:
-        resp = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=800,
-            temperature=0.7,
-        )
-        return resp.choices[0].message.content
-    except Exception as e:
-        return f"⚠️ AI Error: {str(e)}"
+def groq_ai(prompt, system=""):
+    # This disables the LLM connection while keeping your UI features active
+    return "💡 Feature Tip: This section is currently in local-mode. Advanced generative AI is disabled."
 
 def translate_text(text, target_lang):
     lang_map = {
