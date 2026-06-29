@@ -87,6 +87,9 @@ streamlit run app.py
 The app will open at **http://localhost:8501**
 
 ---
+# Live Demo App Of the project (ZenitAi) 👇
+https://3rwvhsbwwjav3ziii6wpwo.streamlit.app/
+
 
 ## 🚀 Deployment (Streamlit Cloud)
 
