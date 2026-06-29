@@ -79,11 +79,8 @@ cd zenitai
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Set your Groq API key
-export GROQ_API_KEY="gsk_your_key_here"      # Linux / macOS
-set GROQ_API_KEY=gsk_your_key_here           # Windows CMD
 
-# 4. Run the app
+# 3. Run the app
 streamlit run app.py
 ```
 
@@ -131,21 +128,6 @@ zenitai/
     └── secrets.toml        # Local API key (DO NOT commit this file)
 ```
 
-> Add `.streamlit/secrets.toml` to your `.gitignore` to keep keys safe locally.
-
----
-
-## 🔑 API Key Setup
-
-ZenitAi resolves your Groq API key in this priority order:
-
-| Priority | Source | How to set |
-|---|---|---|
-| 1 | Streamlit Secrets | `secrets.toml` → `[groq] api_key = "..."` |
-| 2 | Environment Variable | `export GROQ_API_KEY="..."` |
-| 3 | Runtime Input | Enter via the in-app setup screen |
-
----
 
 ## 🎨 Design
 
