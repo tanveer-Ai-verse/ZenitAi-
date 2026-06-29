@@ -5,7 +5,6 @@ import plotly.graph_objects as go
 from collections import Counter
 import re
 import os
-from groq import Groq
 from textblob import TextBlob
 from langdetect import detect, DetectorFactory
 import nltk
