@@ -330,7 +330,7 @@ def run_ai_task(prompt, system_prompt="You are a helpful AI English teacher."):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
             ],
-            model="llama3-8b-8192",
+            model="llama-3.3-70b-versatile",
         )
         return completion.choices[0].message.content
     except Exception as e:
