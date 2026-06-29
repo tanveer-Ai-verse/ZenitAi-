@@ -557,7 +557,6 @@ with tabs[3]:
         st.info("Enter text to explore frequencies.")
 
 with tabs[4]:
-    with tabs[4]:
     st.markdown("### 🌍 AI Translator")
     if txt.strip():
         col_t1, col_t2 = st.columns(2)
