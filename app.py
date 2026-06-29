@@ -662,7 +662,7 @@ with tabs[9]:
             st.session_state.ai_calls += 1
             with st.spinner("Creating quiz..."):
                 result = run_ai_task(f"Generate 3 multiple choice questions based on this text: {txt}")
-st.markdown(f'<div class="elite-card">{result}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="elite-card">{result}</div>', unsafe_allow_html=True)
 
     else:
         st.info("Enter text to generate practice questions.")
