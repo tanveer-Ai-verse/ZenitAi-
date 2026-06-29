@@ -1,26 +1,144 @@
+"""
+ZenitAi — AI English Teacher Pro
+Streamlit Cloud-ready deployment
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 1 ─ STANDARD LIBRARY & THIRD-PARTY IMPORTS
+# Everything imported here so nothing is called before it exists.
+# ─────────────────────────────────────────────────────────────────────────────
+import os
+import sys
+import subprocess
+import re
+import random
+from collections import Counter
+
 import streamlit as st
-import spacy
 import pandas as pd
 import plotly.graph_objects as go
-from collections import Counter
-import re
-import os
 from textblob import TextBlob
 from langdetect import detect, DetectorFactory
 import nltk
-from nltk.corpus import stopwords, wordnet
-from nltk.tokenize import sent_tokenize, word_tokenize
-import random
+import spacy
+from groq import Groq
 
 DetectorFactory.seed = 0
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 2 ─ ONE-TIME STARTUP: spaCy model + NLTK data
+# Runs before any Streamlit widget is drawn.
+# @st.cache_resource means it executes only once per server process.
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_resource(show_spinner=False)
+def _bootstrap_nlp_resources():
+    """Download spaCy model and NLTK corpora if missing. Runs once at startup."""
+
+    # ── spaCy en_core_web_sm ──────────────────────────────────────────────
+    try:
+        spacy.load("en_core_web_sm")
+    except OSError:
+        subprocess.run(
+            [sys.executable, "-m", "spacy", "download", "en_core_web_sm"],
+            check=True,
+            capture_output=True,
+        )
+
+    # ── NLTK corpora ──────────────────────────────────────────────────────
+    _nltk_needs = {
+        "punkt":                    "tokenizers/punkt",
+        "punkt_tab":                "tokenizers/punkt_tab",
+        "stopwords":                "corpora/stopwords",
+        "averaged_perceptron_tagger": "taggers/averaged_perceptron_tagger",
+        "wordnet":                  "corpora/wordnet",
+        "omw-1.4":                  "corpora/omw-1.4",
+    }
+    for pkg, path in _nltk_needs.items():
+        try:
+            nltk.data.find(path)
+        except LookupError:
+            nltk.download(pkg, quiet=True)
+
+    return True   # sentinel so cache knows it succeeded
+
+# Run bootstrap now (before any Streamlit UI call except set_page_config)
+_bootstrap_nlp_resources()
+
+# Safe NLTK imports (model data guaranteed present after bootstrap)
+from nltk.corpus import stopwords, wordnet
+from nltk.tokenize import sent_tokenize, word_tokenize
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 3 ─ PAGE CONFIG  (must be the very first st.* call)
+# ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="ZenitAi",
     page_icon="🌟",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 4 ─ API KEY RESOLUTION  (defined BEFORE the gate that uses it)
+# ─────────────────────────────────────────────────────────────────────────────
+def _resolve_api_key() -> str:
+    """
+    Resolve Groq API key in priority order:
+      1. st.secrets["groq"]["api_key"]
+      2. st.secrets["GROQ_API_KEY"]   (flat secret)
+      3. os.environ["GROQ_API_KEY"]
+      4. Runtime input via the setup screen (stored in session_state)
+    Returns an empty string when nothing is found.
+    """
+    # ── 1 & 2: Streamlit Secrets ──────────────────────────────────────────
+    try:
+        nested = st.secrets.get("groq", {})
+        if isinstance(nested, dict):
+            k = nested.get("api_key", "")
+        else:
+            # AttrDict — attribute access
+            k = getattr(nested, "api_key", "")
+        if k:
+            return k.strip()
+    except Exception:
+        pass
+
+    try:
+        k = st.secrets.get("GROQ_API_KEY", "")
+        if k:
+            return k.strip()
+    except Exception:
+        pass
+
+    # ── 3: Environment variable ────────────────────────────────────────────
+    k = os.environ.get("GROQ_API_KEY", "")
+    if k:
+        return k.strip()
+
+    # ── 4: Runtime session (entered via UI form) ───────────────────────────
+    return st.session_state.get("_runtime_api_key", "")
+
+
+GROQ_API_KEY: str = _resolve_api_key()   # ← defined here; gate below is safe
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 5 ─ CACHED RESOURCE LOADERS
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_resource(show_spinner=False)
+def load_nlp():
+    return spacy.load("en_core_web_sm")
+
+
+@st.cache_resource(show_spinner=False)
+def load_groq_client(api_key: str):
+    """Return a Groq client, or None if the key is blank."""
+    if not api_key:
+        return None
+    return Groq(api_key=api_key)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 6 ─ CSS THEME  (injected before the API gate so the gate looks nice)
+# ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500;700&display=swap');
@@ -145,31 +263,44 @@ html, body, [class*='css'] {
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_resource
-def load_nlp():
-    return spacy.load('en_core_web_sm')
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 7 ─ API KEY GATE
+# GROQ_API_KEY is guaranteed to be defined before this block runs.
+# ─────────────────────────────────────────────────────────────────────────────
+if not GROQ_API_KEY:
+    st.markdown("""
+    <div style="background:linear-gradient(145deg,#0D3540,#08262C);border:1px solid rgba(30,123,140,0.35);
+                border-radius:20px;padding:40px;max-width:560px;margin:60px auto;text-align:center;">
+      <div style="font-size:3rem;">🔑</div>
+      <p style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#4DD9F0;margin:8px 0;">API Key Required</p>
+      <p style="color:#7AB8C4;font-size:0.9rem;">
+        Enter your <b style="color:#E8F4F8;">Groq API Key</b> to unlock all ZenitAi features.<br/>
+        Get one free at
+        <a href="https://console.groq.com" target="_blank" style="color:#4DD9F0;">console.groq.com</a>
+      </p>
+    </div>
+    """, unsafe_allow_html=True)
 
-# ── API KEY ──────────────────────────────────────────────────────────────────
-# Priority 1: Streamlit Secrets  →  secrets.toml  [groq] api_key = "..."
-# Priority 2: Environment variable  GROQ_API_KEY
-# Priority 3: Runtime input via setup screen (see below)
-def _resolve_api_key():
-    try:
-        k = st.secrets.get("groq", {}).get("api_key", "") or st.secrets.get("GROQ_API_KEY", "")
-        if k: return k
-    except Exception:
-        pass
-    return os.environ.get("GROQ_API_KEY", "")
+    with st.form("api_key_form"):
+        typed_key = st.text_input("Groq API Key", type="password", placeholder="gsk_...")
+        if st.form_submit_button("🚀 Launch ZenitAi", use_container_width=True):
+            if typed_key.strip():
+                st.session_state["_runtime_api_key"] = typed_key.strip()
+                st.rerun()
+            else:
+                st.error("Please enter a valid API key.")
+    st.stop()
 
-GROQ_API_KEY = _resolve_api_key()
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 8 ─ INITIALIZE NLP + GROQ CLIENT
+# Both loaders are defined above, so these calls are always safe.
+# ─────────────────────────────────────────────────────────────────────────────
+nlp          = load_nlp()
+groq_client  = load_groq_client(GROQ_API_KEY)
 
-@st.cache_resource
-def load_groq(api_key: str):
-    return Groq(api_key=api_key) if api_key else None
-
-nlp = load_nlp()
-groq_client = None   # initialised after key check below
-
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 9 ─ HELPER FUNCTIONS  (all defined before they are called below)
+# ─────────────────────────────────────────────────────────────────────────────
 def base_layout(title_text="", height=420):
     return dict(
         title=dict(text=title_text, font=dict(color="#4DD9F0", size=15, family="DM Serif Display")),
@@ -182,61 +313,65 @@ def base_layout(title_text="", height=420):
         yaxis=dict(gridcolor="rgba(30,123,140,0.15)", linecolor="rgba(30,123,140,0.3)"),
     )
 
+
 def get_stats(text):
-    words = re.findall(r'\b\w+\b', text)
+    words     = re.findall(r'\b\w+\b', text)
     sentences = [s for s in re.split(r'[.!?]+', text.strip()) if s.strip()]
-    unique = len(set(w.lower() for w in words))
-    avg_word_len = round(sum(len(w) for w in words) / max(len(words), 1), 1)
-    reading_time = round(len(words) / 200, 1)
+    unique    = len(set(w.lower() for w in words))
+    avg_word_len  = round(sum(len(w) for w in words) / max(len(words), 1), 1)
+    reading_time  = round(len(words) / 200, 1)
     return {
-        "Words": len(words),
-        "Sentences": len(sentences),
-        "Chars": len(text),
+        "Words":            len(words),
+        "Sentences":        len(sentences),
+        "Chars":            len(text),
         "Chars (no space)": len(text.replace(" ", "")),
-        "Unique Words": unique,
-        "Avg Word Len": avg_word_len,
-        "Read Time (min)": reading_time,
+        "Unique Words":     unique,
+        "Avg Word Len":     avg_word_len,
+        "Read Time (min)":  reading_time,
     }
+
 
 def grammar_check(text):
     doc = nlp(text)
     issues = []
-    uncountable = ['information', 'water', 'knowledge', 'advice', 'furniture', 'equipment', 'luggage', 'news']
-
+    uncountable = [
+        'information', 'water', 'knowledge', 'advice',
+        'furniture', 'equipment', 'luggage', 'news',
+    ]
     if not text.strip():
         return []
     if not text[0].isupper():
         issues.append('❌ Capitalization: First letter must be uppercase.')
     if text.strip() and text.strip()[-1] not in ['.', '!', '?']:
         issues.append('❌ Punctuation: Missing terminal punctuation (. ! ?).')
-
     for token in doc:
         if token.text.lower() in uncountable:
             if any(c.text.lower() in ['a', 'an'] for c in token.children):
                 issues.append(f'❌ Countability: "{token.text}" is uncountable — remove a/an.')
-
     return issues
 
+
 TENSE_MAP = {
-    'Simple Present': lambda l: l + 's',
-    'Simple Past': lambda l: l + 'ed',
-    'Simple Future': lambda l: 'will ' + l,
-    'Present Continuous': lambda l: 'is ' + (l[:-1] if l.endswith('e') else l) + 'ing',
-    'Past Continuous': lambda l: 'was ' + (l[:-1] if l.endswith('e') else l) + 'ing',
-    'Future Continuous': lambda l: 'will be ' + (l[:-1] if l.endswith('e') else l) + 'ing',
-    'Present Perfect': lambda l: 'has ' + l + 'ed',
-    'Past Perfect': lambda l: 'had ' + l + 'ed',
-    'Future Perfect': lambda l: 'will have ' + l + 'ed',
-    'Present Perfect Continuous': lambda l: 'has been ' + (l[:-1] if l.endswith('e') else l) + 'ing',
-    'Past Perfect Continuous': lambda l: 'had been ' + (l[:-1] if l.endswith('e') else l) + 'ing',
-    'Future Perfect Continuous': lambda l: 'will have been ' + (l[:-1] if l.endswith('e') else l) + 'ing',
+    'Simple Present':              lambda l: l + 's',
+    'Simple Past':                 lambda l: l + 'ed',
+    'Simple Future':               lambda l: 'will ' + l,
+    'Present Continuous':          lambda l: 'is ' + (l[:-1] if l.endswith('e') else l) + 'ing',
+    'Past Continuous':             lambda l: 'was ' + (l[:-1] if l.endswith('e') else l) + 'ing',
+    'Future Continuous':           lambda l: 'will be ' + (l[:-1] if l.endswith('e') else l) + 'ing',
+    'Present Perfect':             lambda l: 'has ' + l + 'ed',
+    'Past Perfect':                lambda l: 'had ' + l + 'ed',
+    'Future Perfect':              lambda l: 'will have ' + l + 'ed',
+    'Present Perfect Continuous':  lambda l: 'has been ' + (l[:-1] if l.endswith('e') else l) + 'ing',
+    'Past Perfect Continuous':     lambda l: 'had been ' + (l[:-1] if l.endswith('e') else l) + 'ing',
+    'Future Perfect Continuous':   lambda l: 'will have been ' + (l[:-1] if l.endswith('e') else l) + 'ing',
 }
+
 
 def transform_tense(text, tense):
     if not text.strip():
         return 'Please enter a sentence.'
     doc = nlp(text)
-    fn = TENSE_MAP.get(tense)
+    fn  = TENSE_MAP.get(tense)
     if not fn:
         return text
     out = []
@@ -247,10 +382,11 @@ def transform_tense(text, tense):
             out.append(t.text)
     return ' '.join(out)
 
+
 def get_sentiment(text):
     blob = TextBlob(text)
-    pol = blob.sentiment.polarity
-    sub = blob.sentiment.subjectivity
+    pol  = blob.sentiment.polarity
+    sub  = blob.sentiment.subjectivity
     if pol > 0.3:
         label, emoji = 'Positive', '😊'
     elif pol < -0.3:
@@ -259,61 +395,87 @@ def get_sentiment(text):
         label, emoji = 'Neutral', '😐'
     return pol, sub, label, emoji
 
+
 def get_word_freq(text, top_n=15):
     try:
         stop_words = set(stopwords.words('english'))
-    except:
+    except Exception:
         stop_words = set()
-    words = re.findall(r'\b[a-zA-Z]{3,}\b', text.lower())
+    words    = re.findall(r'\b[a-zA-Z]{3,}\b', text.lower())
     filtered = [w for w in words if w not in stop_words]
     return Counter(filtered).most_common(top_n)
+
 
 def detect_language(text):
     try:
         return detect(text)
-    except:
+    except Exception:
         return 'en'
 
-def groq_ai(prompt, system=""):
-    # This disables the LLM connection while keeping your UI features active
-    return "💡 Feature Tip: This section is currently in local-mode. Advanced generative AI is disabled."
+
+def groq_ai(prompt, system="You are a professional linguistics expert and English teacher."):
+    """Call Groq LLaMA. Returns an error string instead of raising if client is missing."""
+    if groq_client is None:
+        return "⚠️ Groq client not initialised. Please check your API key."
+    try:
+        resp = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": prompt},
+            ],
+            max_tokens=800,
+            temperature=0.7,
+        )
+        return resp.choices[0].message.content
+    except Exception as e:
+        return f"⚠️ AI Error: {str(e)}"
+
 
 def translate_text(text, target_lang):
-    lang_map = {
-        'Urdu': 'ur',
-        'Pashto': 'ps',
-        'Hindi': 'hi',
-        'Arabic': 'ar'
-    }
-    target_code = lang_map.get(target_lang, 'ur')
-    prompt = f"Translate this English text to {target_lang}. Provide ONLY the translation, no explanation: {text}"
+    prompt = (
+        f"Translate this English text to {target_lang}. "
+        f"Provide ONLY the translation, no explanation: {text}"
+    )
     return groq_ai(prompt, system=f"You are a professional translator to {target_lang}.")
 
+
 POS_COLORS = {
-    'NOUN': ('#1E7B8C', '#4DD9F0'),
-    'VERB': ('#7C2D8C', '#D87BE0'),
-    'ADJ': ('#1A6B3A', '#4DD990'),
-    'ADV': ('#8C5A00', '#F0C44D'),
-    'PRON': ('#1A3A7C', '#4D90F0'),
-    'DET': ('#5A1A1A', '#F07070'),
-    'ADP': ('#2A2A6C', '#9090F0'),
-    'CONJ': ('#4A2A00', '#D4A030'),
+    'NOUN':  ('#1E7B8C', '#4DD9F0'),
+    'VERB':  ('#7C2D8C', '#D87BE0'),
+    'ADJ':   ('#1A6B3A', '#4DD990'),
+    'ADV':   ('#8C5A00', '#F0C44D'),
+    'PRON':  ('#1A3A7C', '#4D90F0'),
+    'DET':   ('#5A1A1A', '#F07070'),
+    'ADP':   ('#2A2A6C', '#9090F0'),
+    'CONJ':  ('#4A2A00', '#D4A030'),
     'PUNCT': ('#2A2A2A', '#888888'),
-    'NUM': ('#1A4A3A', '#60C8A0'),
+    'NUM':   ('#1A4A3A', '#60C8A0'),
 }
 DEFAULT_POS_COLOR = ('#1A2A2A', '#6AA0A8')
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 10 ─ SIDEBAR
+# ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown('<p style="font-family: DM Serif Display, serif; font-size:1.8rem; color:#4DD9F0; margin:0;">🌟 ZenitAi</p>', unsafe_allow_html=True)
-    st.markdown('<p style="color:#7AB8C4; font-size:0.75rem; letter-spacing:2px; text-transform:uppercase;">Pro Edition v1.0</p>', unsafe_allow_html=True)
+    st.markdown(
+        '<p style="font-family: DM Serif Display, serif; font-size:1.8rem; '
+        'color:#4DD9F0; margin:0;">🌟 ZenitAi</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<p style="color:#7AB8C4; font-size:0.75rem; letter-spacing:2px; '
+        'text-transform:uppercase;">Pro Edition v1.0</p>',
+        unsafe_allow_html=True,
+    )
     st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
 
     st.markdown("**📊 Session Analytics**")
     if 'analyses_done' not in st.session_state:
         st.session_state.analyses_done = 0
-        st.session_state.ai_calls = 0
-        st.session_state.history = []
-        st.session_state.score = 0
+        st.session_state.ai_calls      = 0
+        st.session_state.history       = []
+        st.session_state.score         = 0
 
     col_a, col_b, col_c = st.columns(3)
     with col_a:
@@ -321,14 +483,17 @@ with st.sidebar:
     with col_b:
         st.metric("AI Calls", st.session_state.ai_calls)
     with col_c:
-        st.metric("Score", st.session_state.score)
+        st.metric("Score",    st.session_state.score)
 
     st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
     st.markdown("**🧬 AI Engine Status**")
     st.progress(95, text="spaCy NLP")
-    st.progress(92, text="Groq LLaMA 3.1")
+    st.progress(92, text="Groq LLaMA 3.3")
     st.progress(88, text="TextBlob Sentiment")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 11 ─ MAIN HEADER + TEXT INPUT
+# ─────────────────────────────────────────────────────────────────────────────
 st.markdown('<p class="sub-hero">🌍 MULTILINGUAL · 🎓 EDUCATIONAL · 🤖 AI-POWERED</p>', unsafe_allow_html=True)
 st.markdown('<p class="title-hero">ZenitAi — AI English Teacher</p>', unsafe_allow_html=True)
 st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
@@ -339,7 +504,7 @@ with col_inp:
         "📝 Enter text to analyze:",
         value="He gives me information about the new equipment in the laboratory.",
         height=100,
-        help="Type or paste any English text for comprehensive NLP analysis"
+        help="Type or paste any English text for comprehensive NLP analysis",
     )
 with col_btn:
     st.markdown("<br>", unsafe_allow_html=True)
@@ -350,32 +515,38 @@ if txt.strip():
     if txt not in st.session_state.history:
         st.session_state.history.append(txt)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 12 ─ QUICK STATS ROW
+# ─────────────────────────────────────────────────────────────────────────────
 if txt.strip():
     stats = get_stats(txt)
-    lang = detect_language(txt)
+    lang  = detect_language(txt)
     pol, sub, sent_label, sent_emoji = get_sentiment(txt)
 
     sc1, sc2, sc3, sc4, sc5, sc6 = st.columns(6)
     quick_stats = [
-        (sc1, stats['Words'], "Words"),
-        (sc2, stats['Sentences'], "Sentences"),
-        (sc3, stats['Unique Words'], "Unique Words"),
-        (sc4, f"{stats['Read Time (min)']}m", "Read Time"),
-        (sc5, f"{sent_emoji} {sent_label}", "Sentiment"),
-        (sc6, lang.upper(), "Language"),
+        (sc1, stats['Words'],                    "Words"),
+        (sc2, stats['Sentences'],                "Sentences"),
+        (sc3, stats['Unique Words'],             "Unique Words"),
+        (sc4, f"{stats['Read Time (min)']}m",    "Read Time"),
+        (sc5, f"{sent_emoji} {sent_label}",      "Sentiment"),
+        (sc6, lang.upper(),                      "Language"),
     ]
     for col, val, lbl in quick_stats:
         with col:
             st.markdown(
-                f"""<div class="metric-box">
-                <div class="metric-val">{val}</div>
-                <div class="metric-lbl">{lbl}</div>
-                </div>""",
-                unsafe_allow_html=True
+                f'<div class="metric-box">'
+                f'<div class="metric-val">{val}</div>'
+                f'<div class="metric-lbl">{lbl}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
             )
 
 st.markdown("<br>", unsafe_allow_html=True)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 13 ─ FEATURE TABS
+# ─────────────────────────────────────────────────────────────────────────────
 tabs = st.tabs([
     "🛡️ Grammar",
     "⏳ 12-Tenses",
@@ -389,6 +560,7 @@ tabs = st.tabs([
     "📚 Practice",
 ])
 
+# ── Tab 0: Grammar Guard ──────────────────────────────────────────────────────
 with tabs[0]:
     st.markdown("### 🛡️ Grammar Guard")
     if txt.strip():
@@ -396,11 +568,17 @@ with tabs[0]:
         col_g1, col_g2 = st.columns([2, 1])
         with col_g1:
             if errors:
-                st.markdown(f'<div class="err-card">Found <b>{len(errors)}</b> issue(s):</div>', unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="err-card">Found <b>{len(errors)}</b> issue(s):</div>',
+                    unsafe_allow_html=True,
+                )
                 for e in errors:
                     st.markdown(f'<div class="err-card">{e}</div>', unsafe_allow_html=True)
             else:
-                st.markdown('<div class="ok-card">✅ Perfect grammar! No errors detected.</div>', unsafe_allow_html=True)
+                st.markdown(
+                    '<div class="ok-card">✅ Perfect grammar! No errors detected.</div>',
+                    unsafe_allow_html=True,
+                )
         with col_g2:
             score = max(0, 100 - len(errors) * 20)
             fig_gauge = go.Figure(go.Indicator(
@@ -408,10 +586,10 @@ with tabs[0]:
                 value=score,
                 number={"suffix": "%"},
                 gauge={
-                    'axis': {"range": [0, 100]},
-                    'bar': {"color": "#4DD9F0"},
+                    'axis':    {"range": [0, 100]},
+                    'bar':     {"color": "#4DD9F0"},
                     'bgcolor': "rgba(8,38,44,0.5)",
-                }
+                },
             ))
             fig_gauge.update_layout(**base_layout("Grammar Score", height=250))
             st.plotly_chart(fig_gauge, use_container_width=True)
@@ -425,6 +603,7 @@ with tabs[0]:
     else:
         st.info("Enter text above to check grammar.")
 
+# ── Tab 1: 12-Tense Matrix ────────────────────────────────────────────────────
 with tabs[1]:
     st.markdown("### ⏳ 12-Tense Matrix")
     if txt.strip():
@@ -432,20 +611,24 @@ with tabs[1]:
         with col_t1:
             selected_tense = st.selectbox("Select Tense", list(TENSE_MAP.keys()))
             result = transform_tense(txt, selected_tense)
-            st.markdown(f"""<div class="elite-card">
-                <div style="color:#7AB8C4; font-size:0.75rem;">OUTPUT</div>
-                <div style="font-size:1.05rem; color:#4DD9F0; margin-top:10px;">{result}</div>
-            </div>""", unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="elite-card">'
+                f'<div style="color:#7AB8C4; font-size:0.75rem;">OUTPUT</div>'
+                f'<div style="font-size:1.05rem; color:#4DD9F0; margin-top:10px;">{result}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
         with col_t2:
             st.markdown("**📋 All Transformations**")
-            all_results = []
-            for tense_name in TENSE_MAP:
-                transformed = transform_tense(txt, tense_name)
-                all_results.append({"Tense": tense_name, "Result": transformed})
+            all_results = [
+                {"Tense": tense_name, "Result": transform_tense(txt, tense_name)}
+                for tense_name in TENSE_MAP
+            ]
             st.dataframe(pd.DataFrame(all_results), hide_index=True, use_container_width=True)
     else:
         st.info("Enter text to use tense matrix.")
 
+# ── Tab 2: POS Tags ───────────────────────────────────────────────────────────
 with tabs[2]:
     st.markdown("### 🎨 Parts-of-Speech Painter")
     if txt.strip():
@@ -453,8 +636,14 @@ with tabs[2]:
         tokens_html = ''
         for t in doc:
             bg, fg = POS_COLORS.get(t.pos_, DEFAULT_POS_COLOR)
-            tokens_html += f'<span class="pos-tag" style="background:{bg}; color:{fg};" title="{t.pos_}">{t.text}</span>'
-        st.markdown(f'<div class="elite-card" style="line-height:2.5;">{tokens_html}</div>', unsafe_allow_html=True)
+            tokens_html += (
+                f'<span class="pos-tag" style="background:{bg}; color:{fg};" '
+                f'title="{t.pos_}">{t.text}</span>'
+            )
+        st.markdown(
+            f'<div class="elite-card" style="line-height:2.5;">{tokens_html}</div>',
+            unsafe_allow_html=True,
+        )
 
         pos_counts = Counter(t.pos_ for t in doc if t.pos_ not in ['SPACE', 'PUNCT'])
         if pos_counts:
@@ -471,12 +660,13 @@ with tabs[2]:
     else:
         st.info("Enter text to paint POS tags.")
 
+# ── Tab 3: Word Frequency Lab ─────────────────────────────────────────────────
 with tabs[3]:
     st.markdown("### 📊 Word Frequency Lab")
     if txt.strip():
         freq_data = get_word_freq(txt, top_n=20)
         if freq_data:
-            words_freq = [w for w, c in freq_data]
+            words_freq  = [w for w, c in freq_data]
             counts_freq = [c for w, c in freq_data]
             col_f1, col_f2 = st.columns(2)
 
@@ -501,6 +691,7 @@ with tabs[3]:
     else:
         st.info("Enter text to explore frequencies.")
 
+# ── Tab 4: AI Translator ──────────────────────────────────────────────────────
 with tabs[4]:
     st.markdown("### 🌍 AI Translator")
     if txt.strip():
@@ -512,10 +703,14 @@ with tabs[4]:
                 st.session_state.ai_calls += 1
                 with st.spinner(f"Translating to {target_lang}..."):
                     translation = translate_text(txt, target_lang)
-                    st.markdown(f'<div class="elite-card"><b>Translation:</b><br>{translation}</div>', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="elite-card"><b>Translation:</b><br>{translation}</div>',
+                        unsafe_allow_html=True,
+                    )
     else:
         st.info("Enter text to translate.")
 
+# ── Tab 5: Smart Paraphraser ──────────────────────────────────────────────────
 with tabs[5]:
     st.markdown("### 💬 Smart Paraphraser")
     if txt.strip():
@@ -523,25 +718,25 @@ with tabs[5]:
         if st.button("✍️ Paraphrase", key="paraphrase_btn"):
             st.session_state.ai_calls += 1
             with st.spinner("Rephrasing..."):
-                prompt = f"Rewrite this in {formality} tone: '{txt}'"
-                paraphrase = groq_ai(prompt)
+                paraphrase = groq_ai(f"Rewrite this in {formality} tone: '{txt}'")
                 st.markdown(f'<div class="elite-card">{paraphrase}</div>', unsafe_allow_html=True)
     else:
         st.info("Enter text to paraphrase.")
 
+# ── Tab 6: AI Tutor ───────────────────────────────────────────────────────────
 with tabs[6]:
     st.markdown("### 💡 AI Tutor")
     if txt.strip():
         mode = st.radio(
             "Choose Mode:",
             ['📖 Explain', '🎓 Teach', '💬 Simplify', '🔍 Breakdown'],
-            horizontal=True
+            horizontal=True,
         )
         prompts = {
-            '📖 Explain': f"Explain the grammar of: {txt}",
-            '🎓 Teach': f"Teach vocabulary in: {txt}",
-            '💬 Simplify': f"Simplify this for beginners: {txt}",
-            '🔍 Breakdown': f"Break down this sentence: {txt}"
+            '📖 Explain':    f"Explain the grammar of: {txt}",
+            '🎓 Teach':      f"Teach vocabulary in: {txt}",
+            '💬 Simplify':   f"Simplify this for beginners: {txt}",
+            '🔍 Breakdown':  f"Break down this sentence: {txt}",
         }
         if st.button("🚀 Ask AI", key="ai_ask"):
             st.session_state.ai_calls += 1
@@ -551,6 +746,7 @@ with tabs[6]:
     else:
         st.info("Enter text to use AI Tutor.")
 
+# ── Tab 7: Deep Analysis ──────────────────────────────────────────────────────
 with tabs[7]:
     st.markdown("### 🔭 Deep Analysis")
     if txt.strip():
@@ -579,11 +775,15 @@ with tabs[7]:
                 st.markdown("No entities found.")
 
         st.markdown("**Dependencies**")
-        dep_data = [{"Token": t.text, "POS": t.pos_, "Dependency": t.dep_, "Head": t.head.text} for t in doc]
+        dep_data = [
+            {"Token": t.text, "POS": t.pos_, "Dependency": t.dep_, "Head": t.head.text}
+            for t in doc
+        ]
         st.dataframe(pd.DataFrame(dep_data), hide_index=True, use_container_width=True)
     else:
         st.info("Enter text for deep analysis.")
 
+# ── Tab 8: Style Transformer ──────────────────────────────────────────────────
 with tabs[8]:
     st.markdown("### ✨ Style Transformer")
     if txt.strip():
@@ -592,16 +792,15 @@ with tabs[8]:
             style = st.selectbox("Style:", ['Academic', 'Casual', 'Business', 'Creative'])
         with col_s2:
             tone = st.selectbox("Tone:", ['Formal', 'Friendly', 'Professional', 'Persuasive'])
-
         if st.button("🎨 Transform", key="transform"):
             st.session_state.ai_calls += 1
             with st.spinner("Transforming..."):
-                prompt = f"Rewrite in {style} style with {tone} tone: {txt}"
-                result = groq_ai(prompt)
+                result = groq_ai(f"Rewrite in {style} style with {tone} tone: {txt}")
                 st.markdown(f'<div class="elite-card">{result}</div>', unsafe_allow_html=True)
     else:
         st.info("Enter text to transform.")
 
+# ── Tab 9: Practice Mode ──────────────────────────────────────────────────────
 with tabs[9]:
     st.markdown("### 📚 Practice Mode")
     st.markdown("**🎯 Quiz Generator**")
@@ -609,16 +808,22 @@ with tabs[9]:
         if st.button("Generate MCQ", key="generate_mcq"):
             st.session_state.ai_calls += 1
             with st.spinner("Creating quiz..."):
-                prompt = f"Create 3 multiple choice questions about: {txt}\n\nFormat: Question\nA) Option\nB) Option\nC) Option\nD) Option"
+                prompt = (
+                    f"Create 3 multiple choice questions about: {txt}\n\n"
+                    "Format: Question\nA) Option\nB) Option\nC) Option\nD) Option"
+                )
                 quiz = groq_ai(prompt)
                 st.markdown(f'<div class="elite-card">{quiz}</div>', unsafe_allow_html=True)
     else:
         st.info("Enter text to generate practice questions.")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FOOTER
+# ─────────────────────────────────────────────────────────────────────────────
 st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
 st.markdown(
     '<p style="text-align:center; color:#4DD9F044; font-size:0.75rem;">'
     'ZenitAi Pro v1.0 | Powered by Groq LLaMA 3.3 + spaCy NLP'
     '</p>',
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
