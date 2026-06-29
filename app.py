@@ -474,7 +474,9 @@ with tabs[0]:
 
         if errors and st.button("🤖 AI Grammar Fix", key="ai_fix"):
             st.session_state.ai_calls += 1
-            st.markdown(f'<div class="elite-card">{ai_unavailable("AI Grammar Fix")}</div>', unsafe_allow_html=True)
+            result = run_ai_task(f"Correct the grammar and improve this text: {txt}")
+            st.markdown(f'<div class="elite-card">{result}</div>', unsafe_allow_html=True)
+
     else:
         st.info("Enter text above to check grammar.")
 
@@ -596,7 +598,9 @@ with tabs[6]:
         if st.button("🚀 Ask AI", key="ai_ask"):
             st.session_state.ai_calls += 1
             with st.spinner("Thinking..."):
-                st.markdown(f'<div class="elite-card">{ai_unavailable("AI Tutor")}</div>', unsafe_allow_html=True)
+                result = run_ai_task(f"You are a tutor. Please {mode} the following text: {txt}")
+                st.markdown(f'<div class="elite-card">{result}</div>', unsafe_allow_html=True)
+
     else:
         st.info("Enter text to use AI Tutor.")
 
@@ -645,7 +649,9 @@ with tabs[8]:
         if st.button("🎨 Transform", key="transform"):
             st.session_state.ai_calls += 1
             with st.spinner("Transforming..."):
-                st.markdown(f'<div class="elite-card">{ai_unavailable("Style Transformer")}</div>', unsafe_allow_html=True)
+                result = run_ai_task(f"Transform the style of this text to {style} with a {tone} tone: {txt}")
+                st.markdown(f'<div class="elite-card">{result}</div>', unsafe_allow_html=True)
+
     else:
         st.info("Enter text to transform.")
 
@@ -656,7 +662,9 @@ with tabs[9]:
         if st.button("Generate MCQ", key="generate_mcq"):
             st.session_state.ai_calls += 1
             with st.spinner("Creating quiz..."):
-                st.markdown(f'<div class="elite-card">{ai_unavailable("Quiz Generator")}</div>', unsafe_allow_html=True)
+                result = run_ai_task(f"Generate 3 multiple choice questions based on this text: {txt}")
+st.markdown(f'<div class="elite-card">{result}</div>', unsafe_allow_html=True)
+
     else:
         st.info("Enter text to generate practice questions.")
 
