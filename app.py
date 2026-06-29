@@ -14,6 +14,13 @@ from nltk.corpus import stopwords
 from nltk.tokenize import sent_tokenize, word_tokenize
 import random
 
+# ── Setup Groq Client using Secrets ──
+try:
+    groq_api_key = st.secrets["GROQ_API_KEY"]
+    client = Groq(api_key=groq_api_key)
+except Exception:
+    client = None # Keeps the app from crashing if key is missing
+    
 DetectorFactory.seed = 0
 
 st.set_page_config(
@@ -302,13 +309,33 @@ def detect_language(text):
         return 'en'
 
 
-def ai_unavailable(feature_name="This AI feature"):
-    """Consistent placeholder shown when Groq is not configured."""
-    return (
-        f"⚠️ {feature_name} requires an LLM backend. "
-        "The Groq integration has been removed from this deployment. "
-        "Re-add the groq library and API key to re-enable AI features."
-    )
+from groq import Groq
+
+@st.cache_resource
+def get_groq_client():
+    # This reads the key from your Streamlit Secrets settings
+    try:
+        return Groq(api_key=st.secrets["GROQ_API_KEY"])
+    except Exception:
+        return None
+
+def run_ai_task(prompt, system_prompt="You are a helpful AI English teacher."):
+    client = get_groq_client()
+    if not client:
+        return "⚠️ Error: GROQ_API_KEY not found in Streamlit Secrets."
+    
+    try:
+        completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            model="llama3-8b-8192",
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        return f"AI Error: {str(e)}"
+        
 
 
 def translate_text(text, target_lang):
@@ -528,6 +555,7 @@ with tabs[3]:
         st.info("Enter text to explore frequencies.")
 
 with tabs[4]:
+    with tabs[4]:
     st.markdown("### 🌍 AI Translator")
     if txt.strip():
         col_t1, col_t2 = st.columns(2)
@@ -537,7 +565,9 @@ with tabs[4]:
             if st.button("🌐 Translate Now", key="translate_btn"):
                 st.session_state.ai_calls += 1
                 with st.spinner(f"Translating to {target_lang}..."):
-                    translation = translate_text(txt, target_lang)
+                    # Use the real AI task function instead of ai_unavailable
+                    prompt = f"Translate the following text to {target_lang}: {txt}"
+                    translation = run_ai_task(prompt)
                     st.markdown(f'<div class="elite-card"><b>Translation:</b><br>{translation}</div>', unsafe_allow_html=True)
     else:
         st.info("Enter text to translate.")
@@ -549,7 +579,9 @@ with tabs[5]:
         if st.button("✍️ Paraphrase", key="paraphrase_btn"):
             st.session_state.ai_calls += 1
             with st.spinner("Rephrasing..."):
-                st.markdown(f'<div class="elite-card">{ai_unavailable("Smart Paraphraser")}</div>', unsafe_allow_html=True)
+                result = run_ai_task(f"Paraphrase this text: {txt}")
+                st.markdown(f'<div class="elite-card">{result}</div>', unsafe_allow_html=True)
+
     else:
         st.info("Enter text to paraphrase.")
 
