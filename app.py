@@ -21,33 +21,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ── API KEY GATE ─────────────────────────────────────────────────────────────
-# Resolve from secrets / env first; fall back to runtime input
-if not GROQ_API_KEY:
-    GROQ_API_KEY = st.session_state.get("_runtime_api_key", "")
-
-if not GROQ_API_KEY:
-    st.markdown("""
-    <div style="background:linear-gradient(145deg,#0D3540,#08262C);border:1px solid rgba(30,123,140,0.35);
-                border-radius:20px;padding:40px;max-width:560px;margin:60px auto;text-align:center;">
-      <div style="font-size:3rem;">🔑</div>
-      <p style="font-family:DM Serif Display,serif;font-size:1.8rem;color:#4DD9F0;margin:8px 0;">API Key Required</p>
-      <p style="color:#7AB8C4;font-size:0.9rem;">
-        Enter your <b style="color:#E8F4F8;">Groq API Key</b> to unlock all ZenitAi features.<br/>
-        Get one free at <a href="https://console.groq.com" target="_blank" style="color:#4DD9F0;">console.groq.com</a>
-      </p>
-    </div>
-    """, unsafe_allow_html=True)
-    with st.form("api_key_form"):
-        typed_key = st.text_input("Groq API Key", type="password", placeholder="gsk_...")
-        if st.form_submit_button("🚀 Launch ZenitAi", use_container_width=True):
-            if typed_key.strip():
-                st.session_state["_runtime_api_key"] = typed_key.strip()
-                st.rerun()
-            else:
-                st.error("Please enter a valid API key.")
-    st.stop()
-
 groq_client = load_groq(GROQ_API_KEY)
 
 st.markdown("""
