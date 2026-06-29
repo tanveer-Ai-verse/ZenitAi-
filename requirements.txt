@@ -1,9 +1,8 @@
-streamlit>=1.32.0
-spacy>=3.7.0
-https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
-pandas>=2.0.0
-plotly>=5.18.0
-textblob>=0.17.1
-langdetect>=1.0.9
-nltk>=3.8.1
-scipy>=1.11.0
+streamlit
+spacy
+pandas
+plotly
+textblob
+langdetect
+nltk
+scipy
