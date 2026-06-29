@@ -21,7 +21,6 @@ from textblob import TextBlob
 from langdetect import detect, DetectorFactory
 import nltk
 import spacy
-from groq import Groq
 
 DetectorFactory.seed = 0
 
