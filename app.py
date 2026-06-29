@@ -149,29 +149,26 @@ html, body, [class*='css'] {
 
 
 # ── spaCy model auto-download ─────────────────────────────────────────────────
+# ── spaCy model loader ────────────────────────────────────────────────────────
 @st.cache_resource
 def load_nlp():
-    try:
-        return spacy.load('en_core_web_sm')
-    except OSError:
-        subprocess.run(
-            [sys.executable, "-m", "spacy", "download", "en_core_web_sm"],
-            check=True,
-            capture_output=True,
-        )
-        return spacy.load('en_core_web_sm')
-
+    # We now rely on the pre-installed model via packages.txt
+    return spacy.load('en_core_web_sm')
 
 # ── NLTK data auto-download ───────────────────────────────────────────────────
 @st.cache_resource
 def ensure_nltk():
+    nltk_data_path = os.path.join(os.getcwd(), "nltk_data")
+    if not os.path.exists(nltk_data_path):
+        os.makedirs(nltk_data_path)
+    nltk.data.path.append(nltk_data_path)
+    
     for pkg in ['stopwords', 'punkt', 'wordnet']:
         try:
-            nltk.data.find(f'corpora/{pkg}' if pkg != 'punkt' else f'tokenizers/{pkg}')
-        except LookupError:
-            nltk.download(pkg, quiet=True)
+            nltk.download(pkg, download_dir=nltk_data_path, quiet=True)
+        except Exception:
+            pass
     return True
-
 
 nlp = load_nlp()
 ensure_nltk()
